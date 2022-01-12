@@ -35,7 +35,7 @@ impl<'a> Canvas<'a> {
 
     pub fn update_full(&mut self) -> u32 {
         self.framebuffer_mut().full_refresh(
-            waveform_mode::WAVEFORM_MODE_DU,
+            waveform_mode::WAVEFORM_MODE_GC16,
             display_temp::TEMP_USE_REMARKABLE_DRAW,
             dither_mode::EPDC_FLAG_USE_DITHERING_PASSTHROUGH,
             0,
@@ -47,7 +47,7 @@ impl<'a> Canvas<'a> {
         self.framebuffer_mut().partial_refresh(
             region,
             PartialRefreshMode::Async,
-            waveform_mode::WAVEFORM_MODE_GC16_FAST,
+            waveform_mode::WAVEFORM_MODE_DU,
             display_temp::TEMP_USE_REMARKABLE_DRAW,
             dither_mode::EPDC_FLAG_USE_REMARKABLE_DITHER,
             0, // See documentation on DRAWING_QUANT_BITS in libremarkable/framebuffer/common.rs

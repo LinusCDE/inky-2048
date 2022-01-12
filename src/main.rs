@@ -8,14 +8,71 @@ extern crate log;
 
 use anyhow::Result;
 use canvas::{color, mxcfb_rect, Canvas, Point2, Vector2};
+use fxhash::FxHashMap;
 use libremarkable::framebuffer::FramebufferDraw;
+use libremarkable::image::{DynamicImage, RgbImage, Rgba, RgbaImage};
 use libremarkable::input::{ev::EvDevContext, InputDevice, InputEvent};
-use play_2048::board;
+use once_cell::sync::Lazy;
 use play_2048::{
     board::{Board, Direction},
     game::*,
 };
+use std::time::{Duration, Instant};
+use std::{env, thread};
 use swipe::{Direction as SwipeDirection, Swipe, SwipeTracker, Trigger};
+
+#[rustfmt::skip]
+static NUMBER_IMAGES: Lazy<FxHashMap<u16, RgbaImage>> = Lazy::new(|| {
+    let mut map = FxHashMap::default();
+    map.insert(2, libremarkable::image::load_from_memory(include_bytes!("../res/2.png")).unwrap().to_rgba());
+    map.insert(4, libremarkable::image::load_from_memory(include_bytes!("../res/4.png")).unwrap().to_rgba());
+    map.insert(8, libremarkable::image::load_from_memory(include_bytes!("../res/8.png")).unwrap().to_rgba());
+    map.insert(16, libremarkable::image::load_from_memory(include_bytes!("../res/16.png")).unwrap().to_rgba());
+    map.insert(32, libremarkable::image::load_from_memory(include_bytes!("../res/32.png")).unwrap().to_rgba());
+    map.insert(64, libremarkable::image::load_from_memory(include_bytes!("../res/64.png")).unwrap().to_rgba());
+    map.insert(128, libremarkable::image::load_from_memory(include_bytes!("../res/128.png")).unwrap().to_rgba());
+    map.insert(256, libremarkable::image::load_from_memory(include_bytes!("../res/256.png")).unwrap().to_rgba());
+    map.insert(512, libremarkable::image::load_from_memory(include_bytes!("../res/512.png")).unwrap().to_rgba());
+    map.insert(1024, libremarkable::image::load_from_memory(include_bytes!("../res/1024.png")).unwrap().to_rgba());
+    map.insert(2048, libremarkable::image::load_from_memory(include_bytes!("../res/2048.png")).unwrap().to_rgba());
+    map.insert(4096, libremarkable::image::load_from_memory(include_bytes!("../res/4096.png")).unwrap().to_rgba());
+    map.insert(8192, libremarkable::image::load_from_memory(include_bytes!("../res/8192.png")).unwrap().to_rgba());
+    map.insert(16384, libremarkable::image::load_from_memory(include_bytes!("../res/16384.png")).unwrap().to_rgba());
+    map
+});
+
+#[rustfmt::skip]
+static BG_IMAGES: Lazy<FxHashMap<u16, RgbImage>> = Lazy::new(|| {
+    let mut map = FxHashMap::default();
+    map.insert(2, libremarkable::image::load_from_memory(include_bytes!("../res/bg_2.png")).unwrap().to_rgb());
+    map.insert(4, libremarkable::image::load_from_memory(include_bytes!("../res/bg_4.png")).unwrap().to_rgb());
+    map.insert(8, libremarkable::image::load_from_memory(include_bytes!("../res/bg_8.png")).unwrap().to_rgb());
+    map.insert(16, libremarkable::image::load_from_memory(include_bytes!("../res/bg_16.png")).unwrap().to_rgb());
+    map.insert(32, libremarkable::image::load_from_memory(include_bytes!("../res/bg_32.png")).unwrap().to_rgb());
+    map.insert(64, libremarkable::image::load_from_memory(include_bytes!("../res/bg_64.png")).unwrap().to_rgb());
+    map.insert(128, libremarkable::image::load_from_memory(include_bytes!("../res/bg_128.png")).unwrap().to_rgb());
+    map.insert(256, libremarkable::image::load_from_memory(include_bytes!("../res/bg_256.png")).unwrap().to_rgb());
+    map.insert(512, libremarkable::image::load_from_memory(include_bytes!("../res/bg_512.png")).unwrap().to_rgb());
+    map.insert(1024, libremarkable::image::load_from_memory(include_bytes!("../res/bg_1024.png")).unwrap().to_rgb());
+    map.insert(2048, libremarkable::image::load_from_memory(include_bytes!("../res/bg_2048.png")).unwrap().to_rgb());
+    map.insert(4096, libremarkable::image::load_from_memory(include_bytes!("../res/bg_4096.png")).unwrap().to_rgb());
+    map.insert(8192, libremarkable::image::load_from_memory(include_bytes!("../res/bg_8192.png")).unwrap().to_rgb());
+    map.insert(16384, libremarkable::image::load_from_memory(include_bytes!("../res/bg_16384.png")).unwrap().to_rgb());
+    map
+});
+
+fn duify_image(img: RgbaImage) -> RgbaImage {
+    RgbaImage::from_fn(img.width(), img.height(), |x, y| {
+        let [r, g, b, a] = img.get_pixel(x, y).data;
+        let decided_rgb = if r as u16 + g as u16 + b as u16 > 127 * 3 {
+            255
+        } else {
+            0
+        };
+        let decided_alpha = if a > 127 { 255 } else { 0 };
+        Rgba([decided_rgb, decided_rgb, decided_rgb, decided_alpha])
+    })
+}
 
 impl From<SwipeDirection> for Direction {
     fn from(swipe_dir: SwipeDirection) -> Self {
@@ -28,12 +85,12 @@ impl From<SwipeDirection> for Direction {
     }
 }
 
-const CELL_SIZE: u32 = 300;
+const CELL_SIZE: u32 = 320;
 const CELL_MARGIN: u32 = 4;
 
 fn main() -> Result<()> {
-    if std::env::var("RUST_LOG").is_err() {
-        std::env::set_var("RUST_LOG", "INFO");
+    if env::var("RUST_LOG").is_err() {
+        env::set_var("RUST_LOG", "INFO");
     }
     env_logger::builder().format_timestamp_millis().init();
 
@@ -77,13 +134,16 @@ fn main() -> Result<()> {
             InputEvent::MultitouchEvent { event } => {
                 for swipe in swipe_tracker.detect(event, swipes) {
                     info!("Swiped {:?}", swipe.direction);
+                    let start = Instant::now();
                     let last = board;
                     game.play(swipe.direction.into());
                     draw_changed_cells(&mut canvas, Some(last), game.board)?;
-                    std::thread::sleep(std::time::Duration::from_millis(250));
-                    let last = game.board;
-                    game.populate_new_tile();
-                    draw_changed_cells(&mut canvas, Some(last), game.board)?;
+                    if last != game.board && game.board.count_empty_tiles() > 0 {
+                        thread::sleep(Duration::from_millis(350).saturating_sub(start.elapsed()));
+                        let last = game.board;
+                        game.populate_new_tile();
+                        draw_changed_cells(&mut canvas, Some(last), game.board)?;
+                    }
                     board = game.board;
                 }
             }
@@ -95,63 +155,6 @@ fn main() -> Result<()> {
 
     info!("Bye!");
     Ok(())
-}
-
-fn demo_endless(canvas: &mut Canvas) -> Result<()> {
-    let mut i = 0;
-    loop {
-        let mut num = if i % 2 == 0 { 2 } else { 65536 };
-        let dur = std::time::Duration::from_millis(25);
-        std::thread::sleep(dur);
-        draw_cell(canvas, 0, 0, num)?;
-        #[rustfmt::skip] if i % 2 == 0 { num *= 2 } else { num /= 2 };
-        std::thread::sleep(dur);
-        draw_cell(canvas, 1, 0, num)?;
-        #[rustfmt::skip] if i % 2 == 0 { num *= 2 } else { num /= 2 };
-        std::thread::sleep(dur);
-        draw_cell(canvas, 2, 0, num)?;
-        #[rustfmt::skip] if i % 2 == 0 { num *= 2 } else { num /= 2 };
-        std::thread::sleep(dur);
-        draw_cell(canvas, 3, 0, num)?;
-        #[rustfmt::skip] if i % 2 == 0 { num *= 2 } else { num /= 2 };
-        std::thread::sleep(dur);
-        draw_cell(canvas, 0, 1, num)?;
-        #[rustfmt::skip] if i % 2 == 0 { num *= 2 } else { num /= 2 };
-        std::thread::sleep(dur);
-        draw_cell(canvas, 1, 1, num)?;
-        #[rustfmt::skip] if i % 2 == 0 { num *= 2 } else { num /= 2 };
-        std::thread::sleep(dur);
-        draw_cell(canvas, 2, 1, num)?;
-        #[rustfmt::skip] if i % 2 == 0 { num *= 2 } else { num /= 2 };
-        std::thread::sleep(dur);
-        draw_cell(canvas, 3, 1, num)?;
-        #[rustfmt::skip] if i % 2 == 0 { num *= 2 } else { num /= 2 };
-        std::thread::sleep(dur);
-        draw_cell(canvas, 0, 2, num)?;
-        #[rustfmt::skip] if i % 2 == 0 { num *= 2 } else { num /= 2 };
-        std::thread::sleep(dur);
-        draw_cell(canvas, 1, 2, num)?;
-        #[rustfmt::skip] if i % 2 == 0 { num *= 2 } else { num /= 2 };
-        std::thread::sleep(dur);
-        draw_cell(canvas, 2, 2, num)?;
-        #[rustfmt::skip] if i % 2 == 0 { num *= 2 } else { num /= 2 };
-        std::thread::sleep(dur);
-        draw_cell(canvas, 3, 2, num)?;
-        #[rustfmt::skip] if i % 2 == 0 { num *= 2 } else { num /= 2 };
-        std::thread::sleep(dur);
-        draw_cell(canvas, 0, 3, num)?;
-        #[rustfmt::skip] if i % 2 == 0 { num *= 2 } else { num /= 2 };
-        std::thread::sleep(dur);
-        draw_cell(canvas, 1, 3, num)?;
-        #[rustfmt::skip] if i % 2 == 0 { num *= 2 } else { num /= 2 };
-        std::thread::sleep(dur);
-        draw_cell(canvas, 2, 3, num)?;
-        #[rustfmt::skip] if i % 2 == 0 { num *= 2 } else { num /= 2 };
-        std::thread::sleep(dur);
-        draw_cell(canvas, 3, 3, num)?;
-
-        i += 1;
-    }
 }
 
 fn full_area() -> mxcfb_rect {
@@ -168,6 +171,7 @@ fn full_area() -> mxcfb_rect {
 
 fn draw_changed_cells(canvas: &mut Canvas, last: Option<Board>, current: Board) -> Result<()> {
     debug!("Board: {}", current);
+    let start = Instant::now();
     for i in 0..16 {
         let draw_value = {
             if let Some(last) = last {
@@ -182,17 +186,18 @@ fn draw_changed_cells(canvas: &mut Canvas, last: Option<Board>, current: Board) 
                 current.get_value(i)
             }
         };
-        draw_cell(canvas, i as u32 % 4, i as u32 / 4, draw_value as u32)?;
+        draw_cell(canvas, i as u32 % 4, i as u32 / 4, draw_value)?;
     }
+    debug!("Update took {:?}", start.elapsed());
     Ok(())
 }
 
-fn draw_cell(canvas: &mut Canvas, x: u32, y: u32, number: u32) -> Result<()> {
-    let ref text = if number == 0 {
+fn draw_cell(canvas: &mut Canvas, x: u32, y: u32, number: u16) -> Result<()> {
+    /*let ref text = if number == 0 {
         "".to_owned()
     } else {
         number.to_string()
-    };
+    };*/
     let cell_area = cell_area(x, y, false)?;
 
     // Clear any previous content
@@ -208,6 +213,7 @@ fn draw_cell(canvas: &mut Canvas, x: u32, y: u32, number: u32) -> Result<()> {
         color::WHITE,
     );
 
+    /*
     // Get estimated size
     let text_size = canvas.framebuffer_mut().draw_text(
         Point2 {
@@ -228,10 +234,44 @@ fn draw_cell(canvas: &mut Canvas, x: u32, y: u32, number: u32) -> Result<()> {
         },
         text,
         100.0f32,
-    );
+    );*/
+
+    if number > 0 {
+        let bg = BG_IMAGES
+            .get(&number)
+            .ok_or(anyhow!("No bg image for number found!"))?;
+        let (img_width, img_height) = bg.dimensions();
+        let bg = DynamicImage::ImageRgb8(bg.clone());
+        canvas.draw_image(
+            Point2 {
+                x: cell_area.left + (cell_area.width - img_width) / 2,
+                y: cell_area.top + (cell_area.height - img_height) / 2,
+            }
+            .cast()
+            .unwrap(),
+            &bg,
+            false,
+        );
+
+        let img = NUMBER_IMAGES
+            .get(&number)
+            .ok_or(anyhow!("No image for number found!"))?;
+        let (img_width, img_height) = img.dimensions();
+        let img = DynamicImage::ImageRgba8(img.clone());
+        canvas.draw_image(
+            Point2 {
+                x: cell_area.left + (cell_area.width - img_width) / 2,
+                y: cell_area.top + (cell_area.height - img_height) / 2,
+            }
+            .cast()
+            .unwrap(),
+            &img,
+            true,
+        );
+    }
 
     canvas.update_partial(&cell_area);
-    debug!("Cell {},{} => {}", x, y, text);
+    debug!("Cell {},{} => {}", x, y, number);
     Ok(())
 }
 
