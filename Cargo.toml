@@ -8,6 +8,7 @@ edition = "2021"
 [dependencies]
 anyhow = "1"
 env_logger = "0.9"
+fxhash = "0.2"
 libremarkable = "0.5"
 log = "0.4"
 play-2048 = "1"

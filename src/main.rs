@@ -1,13 +1,32 @@
 mod canvas;
+mod swipe;
 
 #[macro_use]
 extern crate anyhow;
 #[macro_use]
 extern crate log;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use canvas::{color, mxcfb_rect, Canvas, Point2, Vector2};
 use libremarkable::framebuffer::FramebufferDraw;
+use libremarkable::input::{ev::EvDevContext, InputDevice, InputEvent};
+use play_2048::board;
+use play_2048::{
+    board::{Board, Direction},
+    game::*,
+};
+use swipe::{Direction as SwipeDirection, Swipe, SwipeTracker, Trigger};
+
+impl From<SwipeDirection> for Direction {
+    fn from(swipe_dir: SwipeDirection) -> Self {
+        match swipe_dir {
+            SwipeDirection::Up => Direction::Up,
+            SwipeDirection::Right => Direction::Right,
+            SwipeDirection::Down => Direction::Down,
+            SwipeDirection::Left => Direction::Left,
+        }
+    }
+}
 
 const CELL_SIZE: u32 = 300;
 const CELL_MARGIN: u32 = 4;
@@ -24,7 +43,55 @@ fn main() -> Result<()> {
 
     draw_background(&mut canvas);
 
-    demo_endless(&mut canvas)?;
+    // Initialize game
+    let mut game = GameBuilder::default().build();
+    let mut board = game.board;
+    draw_changed_cells(&mut canvas, None, board)?;
+    //game.board.move_to(direction)
+
+    // Input loop
+    let (input_tx, input_rx) = std::sync::mpsc::channel();
+    EvDevContext::new(InputDevice::Multitouch, input_tx).start();
+    let mut swipe_tracker = SwipeTracker::new();
+    let swipes = &[
+        Swipe {
+            direction: SwipeDirection::Up,
+            trigger: Trigger::Completed,
+        },
+        Swipe {
+            direction: SwipeDirection::Right,
+            trigger: Trigger::Completed,
+        },
+        Swipe {
+            direction: SwipeDirection::Down,
+            trigger: Trigger::Completed,
+        },
+        Swipe {
+            direction: SwipeDirection::Left,
+            trigger: Trigger::Completed,
+        },
+    ];
+
+    for event in input_rx {
+        match event {
+            InputEvent::MultitouchEvent { event } => {
+                for swipe in swipe_tracker.detect(event, swipes) {
+                    info!("Swiped {:?}", swipe.direction);
+                    let last = board;
+                    game.play(swipe.direction.into());
+                    draw_changed_cells(&mut canvas, Some(last), game.board)?;
+                    std::thread::sleep(std::time::Duration::from_millis(250));
+                    let last = game.board;
+                    game.populate_new_tile();
+                    draw_changed_cells(&mut canvas, Some(last), game.board)?;
+                    board = game.board;
+                }
+            }
+            _ => {
+                bail!("Unexpected input event type!")
+            }
+        }
+    }
 
     info!("Bye!");
     Ok(())
@@ -99,8 +166,33 @@ fn full_area() -> mxcfb_rect {
     }
 }
 
+fn draw_changed_cells(canvas: &mut Canvas, last: Option<Board>, current: Board) -> Result<()> {
+    debug!("Board: {}", current);
+    for i in 0..16 {
+        let draw_value = {
+            if let Some(last) = last {
+                let last_val = last.get_value(i);
+                let cur_val = current.get_value(i);
+                if last_val == cur_val {
+                    continue;
+                } else {
+                    cur_val
+                }
+            } else {
+                current.get_value(i)
+            }
+        };
+        draw_cell(canvas, i as u32 % 4, i as u32 / 4, draw_value as u32)?;
+    }
+    Ok(())
+}
+
 fn draw_cell(canvas: &mut Canvas, x: u32, y: u32, number: u32) -> Result<()> {
-    let ref text = number.to_string();
+    let ref text = if number == 0 {
+        "".to_owned()
+    } else {
+        number.to_string()
+    };
     let cell_area = cell_area(x, y, false)?;
 
     // Clear any previous content

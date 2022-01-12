@@ -35,7 +35,7 @@ impl<'a> Canvas<'a> {
 
     pub fn update_full(&mut self) -> u32 {
         self.framebuffer_mut().full_refresh(
-            waveform_mode::WAVEFORM_MODE_GC16,
+            waveform_mode::WAVEFORM_MODE_DU,
             display_temp::TEMP_USE_REMARKABLE_DRAW,
             dither_mode::EPDC_FLAG_USE_DITHERING_PASSTHROUGH,
             0,
